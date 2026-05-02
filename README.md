@@ -75,6 +75,484 @@
 
     function m(name,type,power,cost){return {name,type,power,cost}}
     const S = {
+      tab:"home", app:null, auth:null, db:null, user:null, profile:null, online:false, lastError:'',
+      myTeam: JSON.parse(localStorage.getItem("poo-team") || "null") || starters.slice(0,3),
+      selected:0, roomCode:"", room:null, unsubRoom:null, friends:[], foundUser:null, log:["Chào mừng đến Pokemon Odyssey Online."]
+    };
+
+    const $ = id => document.getElementById(id);
+    const cap = s => s ? s.charAt(0).toUpperCase()+s.slice(1) : "";
+    const rand = (a,b)=>Math.floor(Math.random()*(b-a+1))+a;
+    const clone = x => JSON.parse(JSON.stringify(x));
+
+    function readyConfig(){return !firebaseConfig.apiKey.includes("PASTE_") && !firebaseConfig.projectId.includes("PASTE_")}
+    function codeFromUid(uid){return uid ? uid.slice(0,6).toUpperCase() : "------"}
+    function toast(msg){alert(msg)}
+    function showError(where,e){console.error(where,e);S.lastError=(where+': '+(e?.code||'')+' '+(e?.message||e||'Lỗi không rõ')).trim();toast(S.lastError);renderShell()}
+    function needOnline(){if(!readyConfig()){toast('Chưa thay firebaseConfig thật từ Firebase Console.');return false}if(!S.online||!S.db||!S.user){toast('Chưa kết nối Firebase. Hãy bấm Kết nối Firebase trước.');return false}return true}
+    function addLog(msg){S.log.unshift("• "+msg);S.log=S.log.slice(0,60);render()}
+
+    function openTab(id){S.tab=id;document.querySelectorAll('.pane').forEach(p=>p.classList.remove('active'));$(id).classList.add('active');render()}
+    window.openTab = openTab;
+
+    function renderShell(){
+      $('tabs').innerHTML = tabs.map(([id,label])=>`<button class="tab ${S.tab===id?'active':''}" onclick="openTab('${id}')">${label}</button>`).join('');
+      $('statusPanel').innerHTML = `
+        <div class="stat"><span class="status-dot ${readyConfig()?'ok':''}"></span>Firebase config: ${readyConfig()?'đã điền':'chưa điền'}</div>
+        <div class="stat"><span class="status-dot ${S.online?'ok':''}"></span>Online: ${S.online?'đã kết nối':'chưa kết nối'}</div>
+        <div class="stat">👤 Người chơi: ${S.profile?.name || 'chưa tạo'}</div>
+        <div class="stat">🆔 Mã bạn: <span class="copy">${S.profile?.friendCode || '------'}</span></div>
+        <div class="stat">🏠 Phòng: ${S.roomCode || 'chưa vào'}</div>
+        ${S.lastError ? `<div class="danger-note"><b>Lỗi gần nhất:</b><br>${S.lastError}</div>` : ''}
+      `;
+    }
+
+    function render(){
+      renderShell();
+      renderHome(); renderOnline(); renderProfile(); renderFriends(); renderRoom(); renderBattle(); renderTeam(); renderGuide();
+    }
+
+    function renderHome(){
+      $('home').innerHTML = `
+        <div class="grid2">
+          <div class="card">
+            <h2>🎮 Game online đã sẵn sàng để đưa lên GitHub</h2>
+            <p class="muted">Bản này tách rõ phần online: Firebase Auth đăng nhập ẩn danh, Firestore lưu hồ sơ, bạn bè, phòng chơi và trạng thái trận đấu.</p>
+            <div class="grid3">
+              <div class="mini"><h3>1. Hồ sơ</h3><p class="muted">Tạo tên người chơi và mã bạn.</p></div>
+              <div class="mini"><h3>2. Phòng</h3><p class="muted">Tạo room code rồi gửi cho bạn.</p></div>
+              <div class="mini"><h3>3. PvP</h3><p class="muted">Hai người đánh theo lượt realtime.</p></div>
+            </div>
+            <div class="row" style="margin-top:12px">
+              <button onclick="openTab('online')">Bắt đầu cài Firebase</button>
+              <button class="btn-blue" onclick="openTab('guide')">Xem hướng dẫn deploy</button>
+            </div>
+          </div>
+          <div class="card">
+            <h2>📜 Nhật ký</h2>
+            <div class="log">${S.log.map(x=>`<div>${x}</div>`).join('')}</div>
+          </div>
+        </div>`;
+    }
+
+    function renderOnline(){
+      $('online').innerHTML = `
+        <div class="grid2">
+          <div class="card">
+            <h2>🌐 Kết nối Firebase</h2>
+            <p class="muted">Trước tiên, thay thông tin trong biến <b>firebaseConfig</b>. Sau đó bấm kết nối.</p>
+            <div class="danger-note"><b>Lưu ý:</b> Nếu chưa thay config, nút kết nối sẽ báo lỗi. Đây là chuyện bình thường khi mới tải code lên GitHub.<br><br><b>Nếu không lưu hồ sơ / không tạo phòng:</b> thường là do chưa bật Anonymous Auth, chưa tạo Firestore Database, hoặc Firestore Rules chưa đúng.</div>
+            <div class="row" style="margin-top:12px">
+              <button onclick="connectFirebase()">Kết nối Firebase</button>
+              <button class="btn-green" onclick="createOrUpdateProfile()" ${S.online?'':'disabled'}>Tạo / cập nhật hồ sơ</button>
+            </div>
+          </div>
+          <div class="card">
+            <h2>🔧 Config cần thay</h2>
+            <div class="code">const firebaseConfig = {
+  apiKey: "...",
+  authDomain: "...firebaseapp.com",
+  projectId: "...",
+  storageBucket: "...appspot.com",
+  messagingSenderId: "...",
+  appId: "..."
+};</div>
+          </div>
+        </div>`;
+    }
+
+    function renderProfile(){
+      $('profile').innerHTML = `
+        <div class="grid2">
+          <div class="card">
+            <h2>👤 Hồ sơ người chơi</h2>
+            <div class="row">
+              <input id="nameInput" placeholder="Tên người chơi" value="${S.profile?.name || ''}">
+              <button onclick="saveProfile()" ${S.online?'':'disabled'}>Lưu hồ sơ</button>
+            </div>
+            <div class="mini" style="margin-top:12px">
+              <b>Mã bạn của bạn</b>
+              <h2 class="copy">${S.profile?.friendCode || '------'}</h2>
+              <p class="muted">Đưa mã này cho bạn bè để họ tìm bạn hoặc mời bạn vào phòng.</p>
+            </div>
+          </div>
+          <div class="card">
+            <h2>📦 Dữ liệu lưu online</h2>
+            <div class="list">
+              <div class="mini">UID: <span class="copy">${S.user?.uid || 'chưa đăng nhập'}</span></div>
+              <div class="mini">Tên: ${S.profile?.name || 'chưa có'}</div>
+              <div class="mini">Team: ${S.myTeam.map(x=>x.name).join(', ')}</div>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function renderFriends(){
+      $('friends').innerHTML = `
+        <div class="grid2">
+          <div class="card">
+            <h2>🤝 Kết bạn</h2>
+            <p class="muted">Nhập mã bạn của người khác để tìm. V1 đang dùng dạng đơn giản: lưu bạn bè hai chiều khi bấm kết bạn.</p>
+            <div class="row">
+              <input id="friendCodeInput" placeholder="Nhập mã bạn, ví dụ A1B2C3">
+              <button onclick="findFriend()" ${S.online?'':'disabled'}>Tìm</button>
+            </div>
+            <div id="foundFriend" style="margin-top:12px">${S.foundUser ? friendFoundHtml() : ''}</div>
+          </div>
+          <div class="card">
+            <h2>👥 Danh sách bạn</h2>
+            <div class="list">${S.friends.length ? S.friends.map(f=>`<div class="mini"><b>${f.name}</b><div class="muted">${f.friendCode}</div></div>`).join('') : '<div class="mini muted">Chưa có bạn bè.</div>'}</div>
+          </div>
+        </div>`;
+    }
+
+    function friendFoundHtml(){
+      return `<div class="mini"><b>${S.foundUser.name}</b><div class="muted">${S.foundUser.friendCode}</div><button style="margin-top:10px" onclick="addFriend()">Kết bạn</button></div>`
+    }
+
+    function renderRoom(){
+      $('room').innerHTML = `
+        <div class="grid2">
+          <div class="card">
+            <h2>🏠 Phòng chơi</h2>
+            <div class="row">
+              <button onclick="createRoom()" ${S.online && S.profile?'':'disabled'}>Tạo phòng</button>
+              <input id="roomInput" placeholder="Nhập room code" value="${S.roomCode || ''}">
+              <button class="btn-blue" onclick="joinRoomByInput()" ${S.online && S.profile?'':'disabled'}>Vào phòng</button>
+            </div>
+            <div class="mini" style="margin-top:12px">
+              <b>Room code hiện tại</b>
+              <h2 class="copy">${S.roomCode || '------'}</h2>
+              <p class="muted">Gửi mã này cho bạn. Bạn nhập mã ở ô trên để vào cùng phòng.</p>
+            </div>
+          </div>
+          <div class="card">
+            <h2>📡 Trạng thái phòng</h2>
+            ${S.room ? roomHtml() : '<div class="mini muted">Chưa có phòng.</div>'}
+          </div>
+        </div>`;
+    }
+
+    function roomHtml(){
+      const r=S.room;
+      return `<div class="list">
+        <div class="mini">Host: ${r.hostName || r.hostUid || '-'}</div>
+        <div class="mini">Guest: ${r.guestName || r.guestUid || 'đang chờ'}</div>
+        <div class="mini">Trạng thái: ${r.status || '-'}</div>
+        <div class="mini">Lượt hiện tại: ${r.turnUid === S.user?.uid ? 'bạn' : r.turnUid ? 'đối thủ' : 'chưa bắt đầu'}</div>
+        <div class="row"><button class="btn-green" onclick="startRoomBattle()" ${canStartBattle()?'':'disabled'}>Bắt đầu trận</button><button class="btn-red" onclick="leaveRoom()">Rời phòng</button></div>
+      </div>`;
+    }
+
+    function canStartBattle(){return S.room && S.user && S.room.hostUid === S.user.uid && S.room.guestUid && S.room.status !== 'battle'}
+
+    function renderBattle(){
+      const r=S.room;
+      let me=null, foe=null;
+      if(r?.battle){
+        if(r.hostUid===S.user?.uid){me=r.battle.host;foe=r.battle.guest}else{me=r.battle.guest;foe=r.battle.host}
+      }
+      $('battle').innerHTML = `
+        <div class="grid2">
+          <div class="card">
+            <h2>⚔️ PvP Battle</h2>
+            ${r?.battle ? battleHtml(me,foe,r) : '<div class="mini muted">Hãy tạo hoặc vào phòng, sau đó chủ phòng bấm bắt đầu trận.</div>'}
+          </div>
+          <div class="card">
+            <h2>📜 Battle log</h2>
+            <div class="log">${(r?.battleLog || S.log).map(x=>`<div>${x}</div>`).join('')}</div>
+          </div>
+        </div>`;
+    }
+
+    function battleHtml(me,foe,r){
+      if(!me || !foe) return '<div class="mini muted">Đang chờ dữ liệu trận.</div>';
+      const myTurn = r.turnUid === S.user?.uid;
+      return `<div class="battle-scene" id="scene"><div class="fx" id="fx"></div><div class="shadow left"></div><div class="shadow right"></div><img class="poke me" src="${me.sprite}"><img class="poke foe" src="${foe.sprite}"></div>
+      <div class="grid2" style="margin-top:12px">
+        <div class="mini"><b>${me.name}</b><div class="bar"><span class="hp" style="width:${Math.max(0,me.hp/me.maxHp*100)}%"></span></div><small>HP ${me.hp}/${me.maxHp}</small><div class="bar"><span class="en" style="width:${Math.max(0,me.energy/me.maxEnergy*100)}%"></span></div><small>Energy ${me.energy}/${me.maxEnergy}</small></div>
+        <div class="mini"><b>${foe.name}</b><div class="bar"><span class="hp" style="width:${Math.max(0,foe.hp/foe.maxHp*100)}%"></span></div><small>HP ${foe.hp}/${foe.maxHp}</small><div class="bar"><span class="en" style="width:${Math.max(0,foe.energy/foe.maxEnergy*100)}%"></span></div><small>Energy ${foe.energy}/${foe.maxEnergy}</small></div>
+      </div>
+      <div class="moves">${me.moves.map((mv,i)=>`<button class="move" onclick="onlineMove(${i})" ${myTurn && me.energy>=mv.cost && me.hp>0 && foe.hp>0?'':'disabled'}>${mv.name}<br><small>${cap(mv.type)} • Power ${mv.power} • Cost ${mv.cost}</small></button>`).join('')}</div>
+      <div class="row" style="margin-top:12px"><button class="btn-blue" onclick="onlineCharge()" ${myTurn && me.hp>0 && foe.hp>0?'':'disabled'}>⚡ Tích năng lượng</button><button class="ghost" onclick="openTab('room')">Về phòng</button></div>
+      <p class="muted">${myTurn ? 'Đến lượt bạn.' : 'Đang chờ đối thủ.'}</p>`;
+    }
+
+    function renderTeam(){
+      $('team').innerHTML = `<div class="card"><h2>📦 Chọn đội hình online</h2><p class="muted">V1 chọn 3 Pokémon. Dữ liệu này lưu localStorage và gửi vào phòng khi bắt đầu trận.</p><div class="pokemon-grid">${starters.map((mon,i)=>`<div class="mon ${S.myTeam.some(x=>x.id===mon.id)?'active':''}" onclick="toggleTeam(${i})"><img src="${mon.sprite}"><b>${mon.name}</b><div>${mon.types.map(t=>`<span class="type">${cap(t)}</span>`).join('')}</div><div class="muted">HP ${mon.maxHp} • ATK ${mon.atk}</div></div>`).join('')}</div></div>`;
+    }
+
+    function renderGuide(){
+      $('guide').innerHTML = `
+        <div class="grid2">
+          <div class="card">
+            <h2>📘 Cách đưa lên GitHub Pages</h2>
+            <ol class="muted">
+              <li>Tạo repo, ví dụ <b>pokemon-odyssey-online</b>.</li>
+              <li>Tạo file <b>index.html</b> và dán code này.</li>
+              <li>Vào Firebase Console, tạo project, thêm Web App.</li>
+              <li>Bật <b>Authentication → Anonymous</b>.</li>
+              <li>Bật <b>Firestore Database</b>.</li>
+              <li>Copy firebaseConfig vào phần đầu script.</li>
+              <li>GitHub: Settings → Pages → Deploy from branch → main / root.</li>
+            </ol>
+          </div>
+          <div class="card">
+            <h2>🔐 Firestore rules demo</h2>
+            <p class="muted">Dùng để test. Khi game đông người, nên siết chặt rules hơn.</p>
+            <div class="code">rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null && request.auth.uid == userId;
+      allow delete: if false;
+
+      match /friends/{friendId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow create, update, delete: if request.auth != null && (request.auth.uid == userId || request.auth.uid == friendId);
+      }
+    }
+
+    match /rooms/{roomId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.hostUid == request.auth.uid;
+      allow update: if request.auth != null && (
+        resource.data.hostUid == request.auth.uid ||
+        resource.data.guestUid == request.auth.uid ||
+        resource.data.guestUid == null
+      );
+      allow delete: if request.auth != null && resource.data.hostUid == request.auth.uid;
+    }
+  }
+}</div>
+          </div>
+        </div>`;
+    }
+
+    async function connectFirebase(){
+      if(!readyConfig()) return toast('Bạn cần thay firebaseConfig trước.');
+      try{
+        S.lastError='';
+        if(!S.app){
+          S.app = initializeApp(firebaseConfig);
+          S.auth = getAuth(S.app);
+          S.db = getFirestore(S.app);
+          onAuthStateChanged(S.auth, async user=>{
+            try{
+              if(user){
+                S.user=user;S.online=true;
+                await loadProfile();
+                await loadFriends();
+                render();
+                addLog('Đã kết nối Firebase online.');
+              }else{
+                S.online=false;render();
+              }
+            }catch(e){showError('Auth state / load profile',e)}
+          });
+        }
+        await signInAnonymously(S.auth);
+      }catch(e){showError('connectFirebase',e)}
+    }
+
+    async function loadProfile(){
+      if(!S.user || !S.db) return;
+      const ref=doc(S.db,'users',S.user.uid);const snap=await getDoc(ref);
+      if(snap.exists()) S.profile=snap.data();
+      else {S.profile={uid:S.user.uid,name:'Trainer '+codeFromUid(S.user.uid),friendCode:codeFromUid(S.user.uid),createdAt:Date.now()};await setDoc(ref,S.profile,{merge:true})}
+    }
+
+    async function createOrUpdateProfile(){await saveProfile()}
+    async function saveProfile(){
+      if(!needOnline()) return;
+      try{
+        S.lastError='';
+        const name=($('nameInput')?.value || S.profile?.name || 'Trainer '+codeFromUid(S.user.uid)).trim().slice(0,24);
+        S.profile={uid:S.user.uid,name,friendCode:codeFromUid(S.user.uid),team:S.myTeam.map(x=>x.id),updatedAt:Date.now()};
+        await setDoc(doc(S.db,'users',S.user.uid),S.profile,{merge:true});
+        toast('Đã lưu hồ sơ.');render();
+      }catch(e){showError('saveProfile',e)}
+    }
+
+    async function findFriend(){
+      if(!needOnline()) return;
+      try{
+        S.lastError='';
+        const code=($('friendCodeInput').value||'').trim().toUpperCase();
+        if(!code) return toast('Hãy nhập mã bạn.');
+        const q=query(collection(S.db,'users'),where('friendCode','==',code));const qs=await getDocs(q);
+        S.foundUser=null;qs.forEach(d=>{if(d.id!==S.user.uid)S.foundUser=d.data()});
+        if(!S.foundUser) toast('Không tìm thấy người chơi. Người kia cần bấm Kết nối Firebase và Lưu hồ sơ trước.');renderFriends();
+      }catch(e){showError('findFriend',e)}
+    }
+
+    async function addFriend(){
+      if(!needOnline()) return;
+      if(!S.foundUser) return;
+      try{
+        S.lastError='';
+        await setDoc(doc(S.db,'users',S.user.uid,'friends',S.foundUser.uid),{uid:S.foundUser.uid,name:S.foundUser.name,friendCode:S.foundUser.friendCode,createdAt:Date.now()});
+        await setDoc(doc(S.db,'users',S.foundUser.uid,'friends',S.user.uid),{uid:S.user.uid,name:S.profile.name,friendCode:S.profile.friendCode,createdAt:Date.now()});
+        await loadFriends();toast('Đã kết bạn.');render();
+      }catch(e){showError('addFriend',e)}
+    }
+
+    async function loadFriends(){
+      if(!S.online||!S.db||!S.user) return;
+      try{S.friends=[];const qs=await getDocs(collection(S.db,'users',S.user.uid,'friends'));qs.forEach(d=>S.friends.push(d.data()));}
+      catch(e){showError('loadFriends',e)}
+    }
+
+    function roomCode(){return Math.random().toString(36).slice(2,6).toUpperCase()+rand(10,99)}
+    async function createRoom(){
+      if(!needOnline()) return;
+      if(!S.profile) return toast('Bạn cần lưu hồ sơ trước khi tạo phòng.');
+      try{
+        S.lastError='';
+        const code=roomCode();S.roomCode=code;
+        const room={code,hostUid:S.user.uid,hostName:S.profile.name,guestUid:null,guestName:null,status:'waiting',turnUid:null,createdAt:Date.now(),battleLog:['• Phòng đã được tạo.']};
+        await setDoc(doc(S.db,'rooms',code),room);listenRoom(code);openTab('room');
+      }catch(e){showError('createRoom',e)}
+    }
+    async function joinRoomByInput(){const code=($('roomInput').value||'').trim().toUpperCase();if(code) await joinRoom(code)}
+    async function joinRoom(code){
+      if(!needOnline()) return;
+      if(!S.profile) return toast('Bạn cần lưu hồ sơ trước khi vào phòng.');
+      try{
+        S.lastError='';
+        const ref=doc(S.db,'rooms',code);const snap=await getDoc(ref);if(!snap.exists())return toast('Không có phòng này.');
+        const r=snap.data();
+        if(r.hostUid!==S.user.uid && !r.guestUid) await updateDoc(ref,{guestUid:S.user.uid,guestName:S.profile.name,status:'ready',battleLog:arrayUnion('• '+S.profile.name+' đã vào phòng.')});
+        else if(r.hostUid!==S.user.uid && r.guestUid!==S.user.uid) return toast('Phòng này đã đủ người.');
+        S.roomCode=code;listenRoom(code);openTab('room');
+      }catch(e){showError('joinRoom',e)}
+    }
+    function listenRoom(code){
+      if(S.unsubRoom) S.unsubRoom();
+      S.unsubRoom=onSnapshot(doc(S.db,'rooms',code),snap=>{S.room=snap.exists()?snap.data():null;render();});
+    }
+    async function leaveRoom(){
+      if(!S.roomCode) return;
+      if(S.unsubRoom) S.unsubRoom();
+      S.room=null;S.roomCode='';render();
+    }
+
+    async function startRoomBattle(){
+      if(!canStartBattle())return;
+      const hostMon=clone(S.myTeam[0]);
+      const guestMon=clone(starters[3]);
+      const r=S.room;
+      await updateDoc(doc(S.db,'rooms',S.roomCode),{
+        status:'battle',turnUid:r.hostUid,
+        battle:{host:hostMon,guest:guestMon},
+        battleLog:arrayUnion('• Trận đấu bắt đầu!')
+      });
+      openTab('battle');
+    }
+
+    function damage(att,def,move){
+      const crit=Math.random()<.12?1.65:1;const raw=move.power+att.atk*.42-def.def*.18;const dmg=Math.max(4,Math.round(raw*crit*(.9+Math.random()*.22)));def.hp=Math.max(0,def.hp-dmg);att.energy=Math.min(att.maxEnergy,att.energy+10);return {dmg,crit:crit>1};
+    }
+    async function onlineMove(i){
+      const r=clone(S.room);if(!r?.battle || r.turnUid!==S.user.uid)return;
+      const isHost=r.hostUid===S.user.uid;const me=isHost?r.battle.host:r.battle.guest;const foe=isHost?r.battle.guest:r.battle.host;const mv=me.moves[i];if(me.energy<mv.cost)return;
+      me.energy-=mv.cost;const result=damage(me,foe,mv);let text='• '+me.name+' dùng '+mv.name+', gây '+result.dmg+' sát thương'+(result.crit?' chí mạng!':'!');
+      if(foe.hp<=0){text+=' '+foe.name+' đã gục!';r.status='finished';r.turnUid=null}else r.turnUid=isHost?r.guestUid:r.hostUid;
+      if(isHost){r.battle.host=me;r.battle.guest=foe}else{r.battle.guest=me;r.battle.host=foe}
+      await updateDoc(doc(S.db,'rooms',S.roomCode),{battle:r.battle,status:r.status,turnUid:r.turnUid,battleLog:arrayUnion(text)});animate(mv.type);
+    }
+    async function onlineCharge(){
+      const r=clone(S.room);if(!r?.battle || r.turnUid!==S.user.uid)return;
+      const isHost=r.hostUid===S.user.uid;const me=isHost?r.battle.host:r.battle.guest;
+      me.energy=Math.min(me.maxEnergy,me.energy+35);if(isHost)r.battle.host=me;else r.battle.guest=me;
+      r.turnUid=isHost?r.guestUid:r.hostUid;
+      await updateDoc(doc(S.db,'rooms',S.roomCode),{battle:r.battle,turnUid:r.turnUid,battleLog:arrayUnion('• '+me.name+' tích thêm năng lượng.')});
+    }
+
+    function animate(type){
+      const fx=$('fx');if(!fx)return;fx.innerHTML='';const colors={fire:'#fb923c',water:'#38bdf8',grass:'#22c55e',electric:'#fde047',psychic:'#c084fc',normal:'#e2e8f0'};for(let i=0;i<12;i++){let p=document.createElement('div');p.className='particle';let s=rand(14,34);p.style.width=s+'px';p.style.height=s+'px';p.style.left=rand(130,230)+'px';p.style.top=rand(150,240)+'px';p.style.background='radial-gradient(circle,#fff,'+(colors[type]||'#fff')+')';p.style.setProperty('--dx',rand(260,430)+'px');p.style.setProperty('--dy',rand(-120,40)+'px');p.style.animationDelay=(i*.025)+'s';fx.appendChild(p)}setTimeout(()=>fx.innerHTML='',800)
+    }
+
+    function toggleTeam(index){
+      const mon=starters[index];const exists=S.myTeam.some(x=>x.id===mon.id);
+      if(exists) S.myTeam=S.myTeam.filter(x=>x.id!==mon.id); else {if(S.myTeam.length>=3)return toast('Đội online tối đa 3 Pokémon ở bản V1.');S.myTeam.push(clone(mon))}
+      if(!S.myTeam.length)S.myTeam.push(clone(starters[0]));localStorage.setItem('poo-team',JSON.stringify(S.myTeam));renderTeam();
+    }
+
+    window.connectFirebase=connectFirebase;window.createOrUpdateProfile=createOrUpdateProfile;window.saveProfile=saveProfile;window.findFriend=findFriend;window.addFriend=addFriend;window.createRoom=createRoom;window.joinRoomByInput=joinRoomByInput;window.startRoomBattle=startRoomBattle;window.leaveRoom=leaveRoom;window.onlineMove=onlineMove;window.onlineCharge=onlineCharge;window.toggleTeam=toggleTeam;
+
+    render();
+  </script>
+</body>
+</html>
+  </style>
+</head>
+<body>
+  <div class="app">
+    <section class="hero">
+      <div class="card">
+        <h1>Pokemon Odyssey<br/>Online</h1>
+        <p class="muted">Bản Firebase V1: tạo hồ sơ người chơi, room code, mời bạn vào phòng và đấu theo lượt realtime. Chạy được trên GitHub Pages, còn online được xử lý bằng Firebase Auth + Firestore.</p>
+        <div class="row" style="margin-top:12px">
+          <button onclick="openTab('online')">🌐 Cài Online</button>
+          <button class="btn-blue" onclick="openTab('room')">🏠 Tạo / Vào phòng</button>
+          <button class="btn-green" onclick="openTab('battle')">⚔️ Chiến đấu</button>
+          <button class="ghost" onclick="openTab('guide')">📘 Hướng dẫn GitHub</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Trạng thái</h3>
+        <div class="list" id="statusPanel"></div>
+      </div>
+    </section>
+
+    <nav class="tabs" id="tabs"></nav>
+
+    <main>
+      <section id="home" class="pane active"></section>
+      <section id="online" class="pane"></section>
+      <section id="profile" class="pane"></section>
+      <section id="friends" class="pane"></section>
+      <section id="room" class="pane"></section>
+      <section id="battle" class="pane"></section>
+      <section id="team" class="pane"></section>
+      <section id="guide" class="pane"></section>
+    </main>
+
+    <footer class="footer">Pokemon Odyssey Online • HTML/CSS/JS một file • Firebase realtime • GitHub Pages ready</footer>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+    import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { getFirestore, doc, setDoc, getDoc, updateDoc, collection, query, where, getDocs, onSnapshot, serverTimestamp, arrayUnion, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "PASTE_YOUR_API_KEY_HERE",
+      authDomain: "PASTE_YOUR_PROJECT.firebaseapp.com",
+      projectId: "PASTE_YOUR_PROJECT_ID",
+      storageBucket: "PASTE_YOUR_PROJECT.appspot.com",
+      messagingSenderId: "PASTE_YOUR_SENDER_ID",
+      appId: "PASTE_YOUR_APP_ID"
+    };
+
+    const tabs = [
+      ["home","🏠 Trang chủ"], ["online","🌐 Online"], ["profile","👤 Hồ sơ"], ["friends","🤝 Bạn bè"],
+      ["room","🏠 Phòng chơi"], ["battle","⚔️ PvP Battle"], ["team","📦 Đội hình"], ["guide","📘 GitHub + Firebase"]
+    ];
+
+    const starters = [
+      {id:1,name:"Bulbasaur",types:["grass","poison"],hp:116,maxHp:116,energy:40,maxEnergy:100,atk:48,def:44,sprite:"https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/1.png",moves:[m("Leaf Cutter","grass",20,0),m("Vine Lash","grass",34,15),m("Toxic Bloom","poison",45,30),m("Solar Storm","grass",68,50)]},
+      {id:4,name:"Charmander",types:["fire"],hp:104,maxHp:104,energy:45,maxEnergy:100,atk:55,def:38,sprite:"https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/4.png",moves:[m("Ember Burst","fire",21,0),m("Flame Dash","fire",34,15),m("Inferno Fang","fire",48,32),m("Solar Inferno","fire",70,52)]},
+      {id:7,name:"Squirtle",types:["water"],hp:112,maxHp:112,energy:40,maxEnergy:100,atk:45,def:60,sprite:"https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/7.png",moves:[m("Bubble Jet","water",19,0),m("Aqua Slash","water",33,14),m("Tidal Crush","water",47,31),m("Ocean Breaker","water",69,52)]},
+      {id:25,name:"Pikachu",types:["electric"],hp:96,maxHp:96,energy:55,maxEnergy:110,atk:58,def:35,sprite:"https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/25.png",moves:[m("Spark Bolt","electric",20,0),m("Volt Dash","electric",36,16),m("Thunder Cage","electric",51,34),m("Heaven Thunder","electric",74,55)]},
+      {id:133,name:"Eevee",types:["normal"],hp:110,maxHp:110,energy:45,maxEnergy:100,atk:52,def:45,sprite:"https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/133.png",moves:[m("Quick Strike","normal",20,0),m("Double Hit","normal",35,15),m("Adaptive Rush","normal",49,32),m("Evolution Pulse","normal",72,55)]},
+      {id:150,name:"Mewtwo",types:["psychic"],hp:140,maxHp:140,energy:60,maxEnergy:120,atk:70,def:55,sprite:"https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/150.png",moves:[m("Mind Tap","psychic",24,0),m("Psy Cut","psychic",40,18),m("Dream Nova","psychic",58,38),m("Astral Collapse","psychic",86,62)]}
+    ];
+
+    function m(name,type,power,cost){return {name,type,power,cost}}
+    const S = {
       tab:"home", app:null, auth:null, db:null, user:null, profile:null, online:false,
       myTeam: JSON.parse(localStorage.getItem("poo-team") || "null") || starters.slice(0,3),
       selected:0, roomCode:"", room:null, unsubRoom:null, friends:[], foundUser:null, log:["Chào mừng đến Pokemon Odyssey Online."]
